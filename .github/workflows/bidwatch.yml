@@ -1,1 +1,109 @@
+# BidWatch in the cloud — runs on GitHub's computers, nothing of yours needs to be switched on.
+# Times are in UTC: 13:17 UTC = 5:17 AM Pacific in winter, 6:17 AM in summer.
+#                   09:41 UTC = 1:41 AM Pacific in winter, 2:41 AM in summer.
+# GitHub may start scheduled runs a few minutes to an hour late at busy times.
+name: BidWatch
 
+on:
+  schedule:
+    - cron: "17 13 * * *"    # daily bid check
+    - cron: "41 9 * * *"     # nightly discovery agent
+  workflow_dispatch:         # "Run workflow" button on the Actions tab
+    inputs:
+      job:
+        description: "What to run"
+        type: choice
+        options: [daily check, discovery agent, both]
+        default: daily check
+      email:
+        description: "Send the email"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write            # lets the run save its database back to this repository
+
+concurrency:
+  group: bidwatch-state      # never run two at once (they share the database)
+  cancel-in-progress: false
+
+env:
+  BIDWATCH_CLOUD: "1"
+  SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+  SMTP_PORT: ${{ secrets.SMTP_PORT }}
+  SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+  SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+  EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+  EMAIL_TO: ${{ secrets.EMAIL_TO }}
+  SAM_API_KEY: ${{ secrets.SAM_API_KEY }}
+  BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+  SITE_LOGINS: ${{ secrets.SITE_LOGINS }}
+
+jobs:
+  bidwatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Decide what to run
+        id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ github.event.schedule }}" = "41 9 * * *" ]; then echo "task=discover" >> "$GITHUB_OUTPUT"; else echo "task=run" >> "$GITHUB_OUTPUT"; fi
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          else
+            case "${{ inputs.job }}" in
+              "discovery agent") echo "task=discover" >> "$GITHUB_OUTPUT" ;;
+              "both") echo "task=both" >> "$GITHUB_OUTPUT" ;;
+              *) echo "task=run" >> "$GITHUB_OUTPUT" ;;
+            esac
+            if [ "${{ inputs.email }}" = "false" ]; then echo "flag=--no-email" >> "$GITHUB_OUTPUT"; else echo "flag=" >> "$GITHUB_OUTPUT"; fi
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Check the email settings
+        run: |
+          if [ -z "$SMTP_USERNAME" ] || [ -z "$SMTP_PASSWORD" ] || [ -z "$EMAIL_TO" ]; then
+            echo "::warning::SMTP_USERNAME, SMTP_PASSWORD and EMAIL_TO secrets are not all set, so no email can be sent. See SETUP.md step 3."
+          fi
+
+      - name: Daily bid check
+        if: steps.pick.outputs.task == 'run' || steps.pick.outputs.task == 'both'
+        run: python bidwatch.py run ${{ steps.pick.outputs.flag }}
+
+      - name: Discovery agent
+        if: steps.pick.outputs.task == 'discover' || steps.pick.outputs.task == 'both'
+        run: python bidwatch.py discover ${{ steps.pick.outputs.flag }}
+
+      - name: Save the database and watch list
+        if: always()
+        run: |
+          git config user.name "BidWatch"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for f in bidwatch.db discovery.db urls.csv; do if [ -f "$f" ]; then git add -f "$f"; fi; done
+          if git diff --cached --quiet; then echo "Nothing to save."; exit 0; fi
+          git commit -m "BidWatch ${{ steps.pick.outputs.task }} $(date -u +%Y-%m-%d) [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push && exit 0
+            sleep 5
+          done
+          echo "::error::Could not save the database"; exit 1
+
+      - name: Keep the reports for 14 days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bidwatch-reports-${{ github.run_number }}
+          path: |
+            reports/
+            logs/
+          if-no-files-found: ignore
+          retention-days: 14
