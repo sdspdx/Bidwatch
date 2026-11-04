@@ -1,0 +1,4 @@
+url,label,state
+# One bid page per line: web address, a name, two-letter state (blank = national).
+# Delete a line (or put # in front of it) to stop watching that page.
+# Rows from the discovery agent's CSV can be pasted straight in.

@@ -1,0 +1,28 @@
+{
+  "keywords": [
+    "replace with your keyword",
+    "another keyword phrase"
+  ],
+  "states": ["WA"],
+
+  "check_documents": true,
+  "auto_add_keyword_links": true,
+
+  "sam_gov": {
+    "enabled": true,
+    "days_back": 1,
+    "max_api_calls_per_day": 10
+  },
+
+  "discovery": {
+    "types": ["city", "county", "port", "utility", "engineering_firm"],
+    "max_sites_per_run": 400,
+    "seed_csv": "my_list.csv"
+  },
+
+  "email": {
+    "smtp_server": "smtp.gmail.com",
+    "smtp_port": 587,
+    "send_when_nothing_found": false
+  }
+}
